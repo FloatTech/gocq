@@ -6,7 +6,7 @@ require (
 	github.com/Baozisoftware/qrcode-terminal-go v0.0.0-20170407111555-c0650d8dff0f
 	github.com/Microsoft/go-winio v0.5.1
 	github.com/Mrs4s/MiraiGo v0.0.0-20220117165008-3b461554b747
-	github.com/RomiChan/websocket v1.4.3-0.20220112132122-0fb50fcee646
+	github.com/RomiChan/websocket v1.4.3-0.20220123145318-307a86b127bc
 	github.com/dustin/go-humanize v1.0.0
 	github.com/fumiama/go-hide-param v0.1.4
 	github.com/gabriel-vasile/mimetype v1.4.0
@@ -36,6 +36,7 @@ require (
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/gocq/rs v1.0.1 // indirect
 	github.com/golang/snappy v0.0.1 // indirect
+	github.com/google/go-cmp v0.5.5 // indirect
 	github.com/google/uuid v1.1.0 // indirect
 	github.com/jonboulle/clockwork v0.2.2 // indirect
 	github.com/lestrrat-go/strftime v1.0.5 // indirect
