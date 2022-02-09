@@ -6,6 +6,9 @@ import (
 )
 
 func Test_expand(t *testing.T) {
+	nullStringMapping := func(_ string) string {
+		return ""
+	}
 	tests := []struct {
 		src      string
 		mapping  func(string) string
@@ -20,6 +23,21 @@ func Test_expand(t *testing.T) {
 			src:      "$123",
 			mapping:  strings.ToUpper,
 			expected: "$123",
+		},
+		{
+			src:      "foo: ${bar:123456}",
+			mapping:  nullStringMapping,
+			expected: "foo: 123456",
+		},
+		{
+			src:      "foo: ${bar:127.0.0.1:5700}",
+			mapping:  nullStringMapping,
+			expected: "foo: 127.0.0.1:5700",
+		},
+		{
+			src:      "foo: ${bar:ws//localhost:9999/ws}",
+			mapping:  nullStringMapping,
+			expected: "foo: ws//localhost:9999/ws",
 		},
 	}
 	for i, tt := range tests {
