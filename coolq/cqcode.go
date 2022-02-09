@@ -45,6 +45,7 @@ type PokeElement struct {
 type LocalImageElement struct {
 	Stream io.ReadSeeker
 	File   string
+	Url    string
 
 	Flash    bool
 	EffectID int32
@@ -72,13 +73,14 @@ type MessageSource struct {
 }
 
 // MessageSourceType 消息来源类型
-type MessageSourceType int32
+type MessageSourceType byte
 
 // MessageSourceType 常量
 const (
-	MessageSourcePrivate      MessageSourceType = 0
-	MessageSourceGroup        MessageSourceType = 1
-	MessageSourceGuildChannel MessageSourceType = 2
+	MessageSourcePrivate MessageSourceType = 1 << iota
+	MessageSourceGroup
+	MessageSourceGuildChannel
+	MessageSourceGuildDirect
 )
 
 const (
@@ -110,7 +112,7 @@ func ToArrayMessage(e []message.IMessageElement, source MessageSource) (r []glob
 		_, ok := e.(*message.ReplyElement)
 		return ok
 	})
-	if reply != nil && source.SourceType == MessageSourceGroup {
+	if reply != nil && source.SourceType&(MessageSourceGroup|MessageSourcePrivate) != 0 {
 		replyElem := reply.(*message.ReplyElement)
 		rid := int64(source.PrimaryID)
 		if rid == 0 {
@@ -276,7 +278,7 @@ func ToStringMessage(e []message.IMessageElement, source MessageSource, isRaw ..
 		_, ok := e.(*message.ReplyElement)
 		return ok
 	})
-	if reply != nil && source.SourceType == MessageSourceGroup {
+	if reply != nil && source.SourceType&(MessageSourceGroup|MessageSourcePrivate) != 0 {
 		replyElem := reply.(*message.ReplyElement)
 		rid := int64(source.PrimaryID)
 		if rid == 0 {
@@ -352,6 +354,20 @@ func ToStringMessage(e []message.IMessageElement, source MessageSource, isRaw ..
 			} else {
 				write("[CQ:image,file=%s,url=%s%s]", hex.EncodeToString(o.Md5)+".image", CQCodeEscapeValue(o.Url), arg)
 			}
+		case *LocalImageElement:
+			var arg string
+			if o.Flash {
+				arg = ",type=flash"
+			}
+			data, err := os.ReadFile(o.File)
+			if err == nil {
+				m := md5.Sum(data)
+				if ur {
+					write("[CQ:image,file=%s%s]", hex.EncodeToString(m[:])+".image", arg)
+				} else {
+					write("[CQ:image,file=%s,url=%s%s]", hex.EncodeToString(m[:])+".image", CQCodeEscapeValue(o.Url), arg)
+				}
+			}
 		case *message.GuildImageElement:
 			write("[CQ:image,file=%s,url=%s]", hex.EncodeToString(o.Md5)+".image", CQCodeEscapeValue(o.Url))
 		case *message.DiceElement:
@@ -413,7 +429,7 @@ func ToMessageContent(e []message.IMessageElement) (r []global.MSG) {
 		case *message.RedBagElement:
 			m = global.MSG{
 				"type": "redbag",
-				"data": global.MSG{"title": o.Title, "type": o.MsgType},
+				"data": global.MSG{"title": o.Title, "type": int(o.MsgType)},
 			}
 		case *message.ForwardElement:
 			m = global.MSG{
@@ -447,6 +463,11 @@ func ToMessageContent(e []message.IMessageElement) (r []global.MSG) {
 			m = global.MSG{
 				"type": "image",
 				"data": data,
+			}
+		case *message.GuildImageElement:
+			m = global.MSG{
+				"type": "image",
+				"data": global.MSG{"file": hex.EncodeToString(o.Md5) + ".image", "url": o.Url},
 			}
 		case *message.FriendImageElement:
 			data := global.MSG{"file": hex.EncodeToString(o.Md5) + ".image", "url": o.Url}
@@ -666,7 +687,7 @@ func (bot *CQBot) ConvertObjectMessage(m gjson.Result, sourceType MessageSourceT
 	d := make(map[string]string)
 	convertElem := func(e gjson.Result) {
 		t := e.Get("type").Str
-		if t == "reply" && sourceType == MessageSourceGroup {
+		if t == "reply" && sourceType&(MessageSourceGroup|MessageSourcePrivate) != 0 {
 			if len(r) > 0 {
 				if _, ok := r[0].(*message.ReplyElement); ok {
 					log.Warnf("警告: 一条信息只能包含一个 Reply 元素.")
@@ -789,7 +810,13 @@ func (bot *CQBot) ConvertContentMessage(content []global.MSG, sourceType Message
 		case "text":
 			r = append(r, message.NewText(data["text"].(string)))
 		case "image":
-			e, err := bot.makeImageOrVideoElem(map[string]string{"file": data["file"].(string)}, false, sourceType)
+			u, ok := data["url"]
+			d := make(map[string]string, 2)
+			if ok {
+				d["url"] = u.(string)
+			}
+			d["file"] = data["file"].(string)
+			e, err := bot.makeImageOrVideoElem(d, false, sourceType)
 			if err != nil {
 				log.Warnf("make image elem error: %v", err)
 				continue
@@ -1244,6 +1271,10 @@ func CQCodeUnescapeValue(content string) string {
 // makeImageOrVideoElem 图片 elem 生成器，单独拎出来，用于公用
 func (bot *CQBot) makeImageOrVideoElem(d map[string]string, video bool, sourceType MessageSourceType) (message.IMessageElement, error) {
 	f := d["file"]
+	u, ok := d["url"]
+	if !ok {
+		u = ""
+	}
 	if strings.HasPrefix(f, "http") {
 		hash := md5.Sum([]byte(f))
 		cacheFile := path.Join(global.CachePath, hex.EncodeToString(hash[:])+".cache")
@@ -1266,7 +1297,7 @@ func (bot *CQBot) makeImageOrVideoElem(d map[string]string, video bool, sourceTy
 		if video {
 			return &LocalVideoElement{File: cacheFile}, nil
 		}
-		return &LocalImageElement{File: cacheFile}, nil
+		return &LocalImageElement{File: cacheFile, Url: f}, nil
 	}
 	if strings.HasPrefix(f, "file") {
 		fu, err := url.Parse(f)
@@ -1292,18 +1323,18 @@ func (bot *CQBot) makeImageOrVideoElem(d map[string]string, video bool, sourceTy
 		if info.Size() == 0 || info.Size() >= maxImageSize {
 			return nil, errors.New("invalid image size")
 		}
-		return &LocalImageElement{File: fu.Path}, nil
+		return &LocalImageElement{File: fu.Path, Url: f}, nil
 	}
 	if strings.HasPrefix(f, "base64") && !video {
 		b, err := param.Base64DecodeString(strings.TrimPrefix(f, "base64://"))
 		if err != nil {
 			return nil, err
 		}
-		return &LocalImageElement{Stream: bytes.NewReader(b)}, nil
+		return &LocalImageElement{Stream: bytes.NewReader(b), Url: f}, nil
 	}
 	rawPath := path.Join(global.ImagePath, f)
 	if video {
-		if strings.HasSuffix(f, ".video") && cache.EnableCacheDB {
+		if strings.HasSuffix(f, ".video") {
 			hash, err := hex.DecodeString(strings.TrimSuffix(f, ".video"))
 			if err == nil {
 				if b := cache.Video.Get(hash); b != nil {
@@ -1328,7 +1359,7 @@ func (bot *CQBot) makeImageOrVideoElem(d map[string]string, video bool, sourceTy
 			return &LocalImageElement{File: cacheFile}, nil
 		}
 	}
-	if strings.HasSuffix(f, ".image") && cache.EnableCacheDB {
+	if strings.HasSuffix(f, ".image") {
 		hash, err := hex.DecodeString(strings.TrimSuffix(f, ".image"))
 		if err == nil {
 			if b := cache.Image.Get(hash); b != nil {
@@ -1348,7 +1379,7 @@ func (bot *CQBot) makeImageOrVideoElem(d map[string]string, video bool, sourceTy
 		return nil, errors.New("invalid image")
 	}
 	if path.Ext(rawPath) != ".image" {
-		return &LocalImageElement{File: rawPath}, nil
+		return &LocalImageElement{File: rawPath, Url: u}, nil
 	}
 	b, err := os.ReadFile(rawPath)
 	if err != nil {
