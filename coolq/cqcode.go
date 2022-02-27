@@ -343,20 +343,6 @@ func ToStringMessage(e []message.IMessageElement, source message.Source, isRaw .
 					write("[CQ:image,file=%s,url=%s%s]", hex.EncodeToString(m[:])+".image", cqcode.EscapeValue(o.URL), arg)
 				}
 			}
-		case *LocalImageElement:
-			var arg string
-			if o.Flash {
-				arg = ",type=flash"
-			}
-			data, err := os.ReadFile(o.File)
-			if err == nil {
-				m := md5.Sum(data)
-				if ur {
-					write("[CQ:image,file=%s%s]", hex.EncodeToString(m[:])+".image", arg)
-				} else {
-					write("[CQ:image,file=%s,url=%s%s]", hex.EncodeToString(m[:])+".image", CQCodeEscapeValue(o.Url), arg)
-				}
-			}
 		case *message.GuildImageElement:
 			write("[CQ:image,file=%s,url=%s]", hex.EncodeToString(o.Md5)+".image", cqcode.EscapeValue(o.Url))
 		case *message.DiceElement:
