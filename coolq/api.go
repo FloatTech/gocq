@@ -38,7 +38,7 @@ type guildMemberPageToken struct {
 	nextQueryParam string
 }
 
-var defaultPageToken = &guildMemberPageToken{
+var defaultPageToken = guildMemberPageToken{
 	guildID:    0,
 	nextIndex:  0,
 	nextRoleID: 2,
@@ -150,13 +150,13 @@ func (bot *CQBot) CQGetGuildMembers(guildID uint64, nextToken string) global.MSG
 	if guild == nil {
 		return Failed(100, "GUILD_NOT_FOUND")
 	}
-	token := defaultPageToken
+	token := &defaultPageToken
 	if nextToken != "" {
 		i, exists := bot.nextTokenCache.Get(nextToken)
 		if !exists {
 			return Failed(100, "NEXT_TOKEN_NOT_EXISTS")
 		}
-		token = i.(*guildMemberPageToken)
+		token = i
 		if token.guildID != guildID {
 			return Failed(100, "GUILD_NOT_MATCH")
 		}
@@ -789,116 +789,120 @@ func (bot *CQBot) CQSendGuildChannelMessage(guildID, channelID uint64, m gjson.R
 
 func (bot *CQBot) uploadForwardElement(m gjson.Result, groupID int64) *message.ForwardElement {
 	ts := time.Now().Add(-time.Minute * 5)
-	fm := message.NewForwardMessage()
 	source := message.Source{SourceType: message.SourceGroup, PrimaryID: groupID}
+	builder := bot.Client.NewForwardMessageBuilder(groupID)
 
-	var w worker
-	resolveElement := func(elems []message.IMessageElement) []message.IMessageElement {
-		for i, elem := range elems {
-			p := &elems[i]
-			switch o := elem.(type) {
-			case *LocalVideoElement:
-				w.do(func() {
-					gm, err := bot.uploadLocalVideo(source, o)
-					if err != nil {
-						log.Warnf(uploadFailedTemplate, "群", groupID, "视频", err)
-					} else {
-						*p = gm
-					}
-				})
-			case *LocalImageElement:
-				w.do(func() {
-					gm, err := bot.uploadLocalImage(source, o)
-					if err != nil {
-						log.Warnf(uploadFailedTemplate, "群", groupID, "图片", err)
-					} else {
-						*p = gm
-					}
-				})
-			}
-		}
-		return elems
-	}
-
-	convert := func(e gjson.Result) *message.ForwardNode {
-		if e.Get("type").Str != "node" {
-			return nil
-		}
-		ts.Add(time.Second)
-		if e.Get("data.id").Exists() {
-			i := e.Get("data.id").Int()
-			m, _ := db.GetGroupMessageByGlobalID(int32(i))
-			if m != nil {
-				return &message.ForwardNode{
-					SenderId:   m.Attribute.SenderUin,
-					SenderName: m.Attribute.SenderName,
-					Time: func() int32 {
-						msgTime := m.Attribute.Timestamp
-						if msgTime == 0 {
-							return int32(ts.Unix())
+	var convertMessage func(m gjson.Result) *message.ForwardMessage
+	convertMessage = func(m gjson.Result) *message.ForwardMessage {
+		fm := message.NewForwardMessage()
+		var w worker
+		resolveElement := func(elems []message.IMessageElement) []message.IMessageElement {
+			for i, elem := range elems {
+				p := &elems[i]
+				switch o := elem.(type) {
+				case *LocalVideoElement:
+					w.do(func() {
+						gm, err := bot.uploadLocalVideo(source, o)
+						if err != nil {
+							log.Warnf(uploadFailedTemplate, "群", groupID, "视频", err)
+						} else {
+							*p = gm
 						}
-						return int32(msgTime)
-					}(),
-					Message: resolveElement(bot.ConvertContentMessage(m.Content, message.SourceGroup)),
+					})
+				case *LocalImageElement:
+					w.do(func() {
+						gm, err := bot.uploadLocalImage(source, o)
+						if err != nil {
+							log.Warnf(uploadFailedTemplate, "群", groupID, "图片", err)
+						} else {
+							*p = gm
+						}
+					})
 				}
 			}
-			log.Warnf("警告: 引用消息 %v 错误或数据库未开启.", e.Get("data.id").Str)
-			return nil
+			return elems
 		}
-		uin := e.Get("data.[user_id,uin].0").Int()
-		msgTime := e.Get("data.time").Int()
-		if msgTime == 0 {
-			msgTime = ts.Unix()
-		}
-		name := e.Get("data.name").Str
-		c := e.Get("data.content")
-		if c.IsArray() {
-			nested := false
-			c.ForEach(func(_, value gjson.Result) bool {
-				if value.Get("type").Str == "node" {
-					nested = true
-					return false
+
+		convert := func(e gjson.Result) *message.ForwardNode {
+			if e.Get("type").Str != "node" {
+				return nil
+			}
+			if e.Get("data.id").Exists() {
+				i := e.Get("data.id").Int()
+				m, _ := db.GetGroupMessageByGlobalID(int32(i))
+				if m != nil {
+					msgTime := m.Attribute.Timestamp
+					if msgTime == 0 {
+						msgTime = ts.Unix()
+					}
+					return &message.ForwardNode{
+						SenderId:   m.Attribute.SenderUin,
+						SenderName: m.Attribute.SenderName,
+						Time:       int32(msgTime),
+						Message:    resolveElement(bot.ConvertContentMessage(m.Content, message.SourceGroup)),
+					}
 				}
-				return true
-			})
-			if nested { // 处理嵌套
-				fe := bot.uploadForwardElement(c, groupID)
+				log.Warnf("警告: 引用消息 %v 错误或数据库未开启.", e.Get("data.id").Str)
+				return nil
+			}
+			uin := e.Get("data.[user_id,uin].0").Int()
+			msgTime := e.Get("data.time").Int()
+			if msgTime == 0 {
+				msgTime = ts.Unix()
+			}
+			name := e.Get("data.name").Str
+			c := e.Get("data.content")
+			if c.IsArray() {
+				nested := false
+				c.ForEach(func(_, value gjson.Result) bool {
+					if value.Get("type").Str == "node" {
+						nested = true
+						return false
+					}
+					return true
+				})
+				if nested { // 处理嵌套
+					nestedNode := builder.NestedNode()
+					builder.Link(nestedNode, convertMessage(c))
+					return &message.ForwardNode{
+						SenderId:   uin,
+						SenderName: name,
+						Time:       int32(msgTime),
+						Message:    []message.IMessageElement{nestedNode},
+					}
+				}
+			}
+			content := bot.ConvertObjectMessage(c, message.SourceGroup)
+			if uin != 0 && name != "" && len(content) > 0 {
 				return &message.ForwardNode{
 					SenderId:   uin,
 					SenderName: name,
 					Time:       int32(msgTime),
-					Message:    []message.IMessageElement{fe},
+					Message:    resolveElement(content),
 				}
 			}
+			log.Warnf("警告: 非法 Forward node 将跳过. uin: %v name: %v content count: %v", uin, name, len(content))
+			return nil
 		}
-		content := bot.ConvertObjectMessage(c, message.SourceGroup)
-		if uin != 0 && name != "" && len(content) > 0 {
-			return &message.ForwardNode{
-				SenderId:   uin,
-				SenderName: name,
-				Time:       int32(msgTime),
-				Message:    resolveElement(content),
-			}
-		}
-		log.Warnf("警告: 非法 Forward node 将跳过. uin: %v name: %v content count: %v", uin, name, len(content))
-		return nil
-	}
 
-	if m.IsArray() {
-		for _, item := range m.Array() {
-			node := convert(item)
+		if m.IsArray() {
+			for _, item := range m.Array() {
+				node := convert(item)
+				if node != nil {
+					fm.AddNode(node)
+				}
+			}
+		} else {
+			node := convert(m)
 			if node != nil {
 				fm.AddNode(node)
 			}
 		}
-	} else {
-		node := convert(m)
-		if node != nil {
-			fm.AddNode(node)
-		}
+
+		w.wait()
+		return fm
 	}
-	w.wait()
-	return bot.Client.UploadGroupForwardMessage(groupID, fm)
+	return builder.Main(convertMessage(m))
 }
 
 // CQSendGroupForwardMessage 扩展API-发送合并转发(群)
@@ -912,17 +916,17 @@ func (bot *CQBot) CQSendGroupForwardMessage(groupID int64, m gjson.Result) globa
 	}
 
 	fe := bot.uploadForwardElement(m, groupID)
-	if fe != nil {
-		ret := bot.Client.SendGroupForwardMessage(groupID, fe)
-		if ret == nil || ret.Id == -1 {
-			log.Warnf("合并转发(群)消息发送失败: 账号可能被风控.")
-			return Failed(100, "SEND_MSG_API_ERROR", "请参考 go-cqhttp 端输出")
-		}
-		return OK(global.MSG{
-			"message_id": bot.InsertGroupMessage(ret),
-		})
+	if fe == nil {
+		return Failed(100, "EMPTY_NODES", "未找到任何可发送的合并转发信息")
 	}
-	return Failed(100, "EMPTY_NODES", "未找到任何可发送的合并转发信息")
+	ret := bot.Client.SendGroupForwardMessage(groupID, fe)
+	if ret == nil || ret.Id == -1 {
+		log.Warnf("合并转发(群)消息发送失败: 账号可能被风控.")
+		return Failed(100, "SEND_MSG_API_ERROR", "请参考 go-cqhttp 端输出")
+	}
+	return OK(global.MSG{
+		"message_id": bot.InsertGroupMessage(ret),
+	})
 }
 
 // CQSendPrivateMessage 发送私聊消息
@@ -993,6 +997,17 @@ func (bot *CQBot) CQSetGroupName(groupID int64, name string) global.MSG {
 		return OK(nil)
 	}
 	return Failed(100, "GROUP_NOT_FOUND", "群聊不存在")
+}
+
+// CQGetGroupMemo 扩展API-获取群公告
+// @route(_get_group_notice)
+func (bot *CQBot) CQGetGroupMemo(groupID int64) global.MSG {
+	r, err := bot.Client.GetGroupNotice(groupID)
+	if err != nil {
+		return Failed(100, "获取群公告失败", err.Error())
+	}
+
+	return OK(r)
 }
 
 // CQSetGroupMemo 扩展API-发送群公告
@@ -1115,9 +1130,9 @@ func (bot *CQBot) CQProcessFriendRequest(flag string, approve bool) global.MSG {
 		return Failed(100, "FLAG_NOT_FOUND", "FLAG不存在")
 	}
 	if approve {
-		req.(*client.NewFriendRequest).Accept()
+		req.Accept()
 	} else {
-		req.(*client.NewFriendRequest).Reject()
+		req.Reject()
 	}
 	return OK(nil)
 }
@@ -1224,27 +1239,6 @@ func (bot *CQBot) CQSetGroupAdmin(groupID, userID int64, enable bool) global.MSG
 	return OK(nil)
 }
 
-// CQGetVipInfo 扩展API-获取VIP信息
-//
-// https://docs.go-cqhttp.org/api/#%E8%8E%B7%E5%8F%96vip%E4%BF%A1%E6%81%AF
-// @route(_get_vip_info)
-func (bot *CQBot) CQGetVipInfo(userID int64) global.MSG {
-	vip, err := bot.Client.GetVipInfo(userID)
-	if err != nil {
-		return Failed(100, "VIP_API_ERROR", err.Error())
-	}
-	msg := global.MSG{
-		"user_id":          vip.Uin,
-		"nickname":         vip.Name,
-		"level":            vip.Level,
-		"level_speed":      vip.LevelSpeed,
-		"vip_level":        vip.VipLevel,
-		"vip_growth_speed": vip.VipGrowthSpeed,
-		"vip_growth_total": vip.VipGrowthTotal,
-	}
-	return OK(msg)
-}
-
 // CQGetGroupHonorInfo 获取群荣誉信息
 //
 // https://git.io/Jtz1H
@@ -1348,7 +1342,7 @@ func (bot *CQBot) CQHandleQuickOperation(context, operation gjson.Result) global
 
 		if reply.Exists() {
 			autoEscape := param.EnsureBool(operation.Get("auto_escape"), false)
-			at := operation.Get("at_sender").Bool() && !isAnonymous && msgType == "group"
+			at := !isAnonymous && operation.Get("at_sender").Bool() && msgType == "group"
 			if at && reply.IsArray() {
 				// 在 reply 数组头部插入CQ码
 				replySegments := make([]global.MSG, 0)
@@ -1394,7 +1388,7 @@ func (bot *CQBot) CQHandleQuickOperation(context, operation gjson.Result) global
 			if operation.Get("delete").Bool() {
 				bot.CQDeleteMessage(int32(context.Get("message_id").Int()))
 			}
-			if operation.Get("kick").Bool() && !isAnonymous {
+			if !isAnonymous && operation.Get("kick").Bool() {
 				bot.CQSetGroupKick(context.Get("group_id").Int(), context.Get("user_id").Int(), "", operation.Get("reject_add_request").Bool())
 			}
 			if operation.Get("ban").Bool() {

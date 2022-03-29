@@ -21,12 +21,12 @@ func (c *Caller) call(action string, p Getter) global.MSG {
 	case ".ocr_image", "ocr_image":
 		p0 := p.Get("image").String()
 		return c.bot.CQOcrImage(p0)
+	case "_get_group_notice":
+		p0 := p.Get("group_id").Int()
+		return c.bot.CQGetGroupMemo(p0)
 	case "_get_model_show":
 		p0 := p.Get("model").String()
 		return c.bot.CQGetModelShow(p0)
-	case "_get_vip_info":
-		p0 := p.Get("user_id").Int()
-		return c.bot.CQGetVipInfo(p0)
 	case "_send_group_notice":
 		p0 := p.Get("group_id").Int()
 		p1 := p.Get("content").String()

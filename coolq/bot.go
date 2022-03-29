@@ -14,6 +14,7 @@ import (
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Mrs4s/MiraiGo/utils"
+	"github.com/RomiChan/syncx"
 	"github.com/pkg/errors"
 	"github.com/segmentio/asm/base64"
 	log "github.com/sirupsen/logrus"
@@ -30,9 +31,9 @@ type CQBot struct {
 	lock   sync.RWMutex
 	events []func(*Event)
 
-	friendReqCache   sync.Map
-	tempSessionCache sync.Map
-	nextTokenCache   *utils.Cache
+	friendReqCache   syncx.Map[string, *client.NewFriendRequest]
+	tempSessionCache syncx.Map[int64, *client.TempSessionInfo]
+	nextTokenCache   *utils.Cache[*guildMemberPageToken]
 }
 
 // Event 事件
@@ -67,40 +68,40 @@ func (e *Event) JSONString() string {
 func NewQQBot(cli *client.QQClient) *CQBot {
 	bot := &CQBot{
 		Client:         cli,
-		nextTokenCache: utils.NewCache(time.Second * 10),
+		nextTokenCache: utils.NewCache[*guildMemberPageToken](time.Second * 10),
 	}
-	bot.Client.OnPrivateMessage(bot.privateMessageEvent)
-	bot.Client.OnGroupMessage(bot.groupMessageEvent)
+	bot.Client.PrivateMessageEvent.Subscribe(bot.privateMessageEvent)
+	bot.Client.GroupMessageEvent.Subscribe(bot.groupMessageEvent)
 	if base.ReportSelfMessage {
-		bot.Client.OnSelfPrivateMessage(bot.privateMessageEvent)
-		bot.Client.OnSelfGroupMessage(bot.groupMessageEvent)
+		bot.Client.SelfPrivateMessageEvent.Subscribe(bot.privateMessageEvent)
+		bot.Client.SelfGroupMessageEvent.Subscribe(bot.groupMessageEvent)
 	}
-	bot.Client.OnTempMessage(bot.tempMessageEvent)
+	bot.Client.TempMessageEvent.Subscribe(bot.tempMessageEvent)
 	bot.Client.GuildService.OnGuildChannelMessage(bot.guildChannelMessageEvent)
 	bot.Client.GuildService.OnGuildMessageReactionsUpdated(bot.guildMessageReactionsUpdatedEvent)
 	bot.Client.GuildService.OnGuildMessageRecalled(bot.guildChannelMessageRecalledEvent)
 	bot.Client.GuildService.OnGuildChannelUpdated(bot.guildChannelUpdatedEvent)
 	bot.Client.GuildService.OnGuildChannelCreated(bot.guildChannelCreatedEvent)
 	bot.Client.GuildService.OnGuildChannelDestroyed(bot.guildChannelDestroyedEvent)
-	bot.Client.OnGroupMuted(bot.groupMutedEvent)
-	bot.Client.OnGroupMessageRecalled(bot.groupRecallEvent)
-	bot.Client.OnGroupNotify(bot.groupNotifyEvent)
-	bot.Client.OnFriendNotify(bot.friendNotifyEvent)
-	bot.Client.OnMemberSpecialTitleUpdated(bot.memberTitleUpdatedEvent)
-	bot.Client.OnFriendMessageRecalled(bot.friendRecallEvent)
-	bot.Client.OnReceivedOfflineFile(bot.offlineFileEvent)
-	bot.Client.OnJoinGroup(bot.joinGroupEvent)
-	bot.Client.OnLeaveGroup(bot.leaveGroupEvent)
-	bot.Client.OnGroupMemberJoined(bot.memberJoinEvent)
-	bot.Client.OnGroupMemberLeaved(bot.memberLeaveEvent)
-	bot.Client.OnGroupMemberPermissionChanged(bot.memberPermissionChangedEvent)
-	bot.Client.OnGroupMemberCardUpdated(bot.memberCardUpdatedEvent)
-	bot.Client.OnNewFriendRequest(bot.friendRequestEvent)
-	bot.Client.OnNewFriendAdded(bot.friendAddedEvent)
-	bot.Client.OnGroupInvited(bot.groupInvitedEvent)
-	bot.Client.OnUserWantJoinGroup(bot.groupJoinReqEvent)
-	bot.Client.OnOtherClientStatusChanged(bot.otherClientStatusChangedEvent)
-	bot.Client.OnGroupDigest(bot.groupEssenceMsg)
+	bot.Client.GroupMuteEvent.Subscribe(bot.groupMutedEvent)
+	bot.Client.GroupMessageRecalledEvent.Subscribe(bot.groupRecallEvent)
+	bot.Client.GroupNotifyEvent.Subscribe(bot.groupNotifyEvent)
+	bot.Client.FriendNotifyEvent.Subscribe(bot.friendNotifyEvent)
+	bot.Client.MemberSpecialTitleUpdatedEvent.Subscribe(bot.memberTitleUpdatedEvent)
+	bot.Client.FriendMessageRecalledEvent.Subscribe(bot.friendRecallEvent)
+	bot.Client.OfflineFileEvent.Subscribe(bot.offlineFileEvent)
+	bot.Client.GroupJoinEvent.Subscribe(bot.joinGroupEvent)
+	bot.Client.GroupLeaveEvent.Subscribe(bot.leaveGroupEvent)
+	bot.Client.GroupMemberJoinEvent.Subscribe(bot.memberJoinEvent)
+	bot.Client.GroupMemberLeaveEvent.Subscribe(bot.memberLeaveEvent)
+	bot.Client.GroupMemberPermissionChangedEvent.Subscribe(bot.memberPermissionChangedEvent)
+	bot.Client.MemberCardUpdatedEvent.Subscribe(bot.memberCardUpdatedEvent)
+	bot.Client.NewFriendRequestEvent.Subscribe(bot.friendRequestEvent)
+	bot.Client.NewFriendEvent.Subscribe(bot.friendAddedEvent)
+	bot.Client.GroupInvitedEvent.Subscribe(bot.groupInvitedEvent)
+	bot.Client.UserWantJoinGroupEvent.Subscribe(bot.groupJoinReqEvent)
+	bot.Client.OtherClientStatusChangedEvent.Subscribe(bot.otherClientStatusChangedEvent)
+	bot.Client.GroupDigestEvent.Subscribe(bot.groupEssenceMsg)
 	go func() {
 		if base.HeartbeatInterval == 0 {
 			log.Warn("警告: 心跳功能已关闭，若非预期，请检查配置文件。")
@@ -158,6 +159,7 @@ func (bot *CQBot) uploadLocalImage(target message.Source, img *LocalImageElement
 	if lawful, mime := base.IsLawfulImage(img.Stream); !lawful {
 		return nil, errors.New("image type error: " + mime)
 	}
+	// todo: enable multi-thread upload, now got error code 81
 	i, err := bot.Client.UploadImage(target, img.Stream, 4)
 	if err != nil {
 		return nil, err
@@ -365,7 +367,7 @@ func (bot *CQBot) SendPrivateMessage(target int64, groupID int64, m *message.Sen
 				}
 				break
 			}
-			msg, err := session.(*client.TempSessionInfo).SendMessage(m)
+			msg, err := session.SendMessage(m)
 			if err != nil {
 				log.Errorf("发送临时会话消息失败: %v", err)
 				break

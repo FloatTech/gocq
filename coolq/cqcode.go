@@ -209,7 +209,7 @@ func ToArrayMessage(e []message.IMessageElement, source message.Source) (r []glo
 		case *message.DiceElement:
 			m = global.MSG{
 				"type": "dice",
-				"data": map[string]string{"value": fmt.Sprint(o.Value)},
+				"data": map[string]string{"value": strconv.FormatInt(int64(o.Value), 10)},
 			}
 		case *message.MarketFaceElement:
 			m = global.MSG{
@@ -917,9 +917,6 @@ func (bot *CQBot) ToElement(t string, d map[string]string, sourceType message.So
 	case "record":
 		f := d["file"]
 		data, err := global.FindFile(f, d["cache"], global.VoicePath)
-		if err == global.ErrSyntax {
-			data, err = global.FindFile(f, d["cache"], global.VoicePathOld)
-		}
 		if err != nil {
 			return nil, err
 		}
@@ -928,8 +925,6 @@ func (bot *CQBot) ToElement(t string, d map[string]string, sourceType message.So
 			if !lawful {
 				return nil, errors.New("audio type error: " + mt)
 			}
-		}
-		if !global.IsAMRorSILK(data) {
 			data, err = global.EncoderSilk(data)
 			if err != nil {
 				return nil, err
@@ -1108,33 +1103,28 @@ func (bot *CQBot) ToElement(t string, d map[string]string, sourceType message.So
 		if cover, ok := d["cover"]; ok {
 			data, _ = global.FindFile(cover, d["cache"], global.ImagePath)
 		} else {
-			_ = global.ExtractCover(v.File, v.File+".jpg")
+			err = global.ExtractCover(v.File, v.File+".jpg")
+			if err != nil {
+				return nil, err
+			}
 			data, _ = os.ReadFile(v.File + ".jpg")
 		}
 		v.thumb = bytes.NewReader(data)
 		video, _ := os.Open(v.File)
 		defer video.Close()
-		_, err = video.Seek(4, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
+		_, _ = video.Seek(4, io.SeekStart)
 		header := make([]byte, 4)
-		_, err = video.Read(header)
-		if err != nil {
-			return nil, err
-		}
+		_, _ = video.Read(header)
 		if !bytes.Equal(header, []byte{0x66, 0x74, 0x79, 0x70}) { // check file header ftyp
 			_, _ = video.Seek(0, io.SeekStart)
 			hash, _ := utils.ComputeMd5AndLength(video)
 			cacheFile := path.Join(global.CachePath, hex.EncodeToString(hash)+".mp4")
-			if global.PathExists(cacheFile) && (d["cache"] == "" || d["cache"] == "1") {
-				goto ok
+			if !(d["cache"] == "" || d["cache"] == "1") || !global.PathExists(cacheFile) {
+				err = global.EncodeMP4(v.File, cacheFile)
+				if err != nil {
+					return nil, err
+				}
 			}
-			err = global.EncodeMP4(v.File, cacheFile)
-			if err != nil {
-				return nil, err
-			}
-		ok:
 			v.File = cacheFile
 		}
 		return v, nil
@@ -1200,7 +1190,7 @@ func (bot *CQBot) makeImageOrVideoElem(d map[string]string, video bool, sourceTy
 		}
 		return &LocalImageElement{File: fu.Path, URL: f}, nil
 	}
-	if strings.HasPrefix(f, "base64") && !video {
+	if !video && strings.HasPrefix(f, "base64") {
 		b, err := param.Base64DecodeString(strings.TrimPrefix(f, "base64://"))
 		if err != nil {
 			return nil, err
@@ -1243,10 +1233,6 @@ func (bot *CQBot) makeImageOrVideoElem(d map[string]string, video bool, sourceTy
 		}
 	}
 	exist := global.PathExists(rawPath)
-	if !exist && global.PathExists(path.Join(global.ImagePathOld, f)) {
-		exist = true
-		rawPath = path.Join(global.ImagePathOld, f)
-	}
 	if !exist {
 		if d["url"] != "" {
 			return bot.makeImageOrVideoElem(map[string]string{"file": d["url"]}, false, sourceType)
