@@ -11,7 +11,7 @@ body:
         ## 感谢您愿意填写错误回报！
         ## 以下是一些注意事项，请务必阅读让我们能够更容易处理
 
-        ### ❗ | 确定没有相同问题的ISSUE已被提出. (教程: https://github.com/Mrs4s/go-cqhttp/issues/633)
+        ### ❗ | 确定没有相同问题的ISSUE已被提出. (教程: https://forums.go-cqhttp.org/t/topic/141)
         ### 🌎| 请准确填写环境信息
         ### ❔ | 打开DEBUG模式复现，并提供出现问题前后至少 10 秒的完整日志内容。请自行删除日志内存在的个人信息及敏感内容。
         ### ⚠ | 如果涉及内存泄漏/CPU占用异常请打开DEBUG模式并下载pprof性能分析.
@@ -24,9 +24,11 @@ body:
     attributes:
       label: 请确保您已阅读以上注意事项，并勾选下方的确认框。
       options:
-        - label: "我已经仔细阅读上述教程和 [\"提问前需知\"](https://github.com/Mrs4s/go-cqhttp/issues/633)"
+        - label: "我已经仔细阅读上述教程和 [\"提问前需知\"](https://forums.go-cqhttp.org/t/topic/141)"
           required: true
-        - label: 我已知晓并同意，如果我不遵循以下格式提交 Issue，或者我使用的并非最新版本，或者我没有提供足够的环境信息，我的 Issue 可能会被无条件自动关闭或/并锁定。
+        - label: "我已经使用 [dev分支版本](https://github.com/Mrs4s/go-cqhttp/actions/workflows/ci.yml) 测试过，问题依旧存在。"
+          required: true
+        - label: "我已经在 [Issue Tracker](https://github.com/Mrs4s/go-cqhttp/issues) 中找过我要提出的问题，没有找到相同问题的ISSUE。"
           required: true
         - label: 我已知晓并同意，此处仅用于汇报程序中存在的问题。若这个 Issue 是关于其他非程序本身问题，则我的 Issue 可能会被无条件自动关闭或/并锁定。（这些问题应当在 Discussion 板块提出。）
           required: true
@@ -39,24 +41,10 @@ body:
         请根据实际使用环境修改以下信息。
 
   # Env | go-cqhttp Version
-  - type: dropdown
+  - type: input
     id: env-gocq-ver
     attributes:
       label: go-cqhttp 版本
-      description: 选择正在使用的版本 (未列出的版本为已不支持，请更新到最新版本。)
-      options:
-        - v1.0.0-beta8-fix1
-        - v1.0.0-beta8
-        - v1.0.0-beta7-fix2
-        - v1.0.0-beta7-fix1
-        - v1.0.0-beta7
-        - v1.0.0-beta6
-        - v1.0.0-beta5
-        - v1.0.0-beta4
-        - v1.0.0-beta3
-        - v1.0.0-beta2
-        - v1.0.0-beta1
-        - 更老的版本
     validations:
       required: true
 
