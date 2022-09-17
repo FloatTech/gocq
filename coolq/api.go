@@ -765,9 +765,9 @@ func (bot *CQBot) CQSendGroupMessage(groupID int64, m gjson.Result, autoEscape b
 		}
 	}
 	fixAt(elem)
-	mid := bot.SendGroupMessage(groupID, &message.SendingMessage{Elements: elem})
-	if mid == -1 {
-		return Failed(100, "SEND_MSG_API_ERROR", "请参考 go-cqhttp 端输出")
+	mid, err := bot.SendGroupMessage(groupID, &message.SendingMessage{Elements: elem})
+	if err != nil {
+		return Failed(100, "SEND_MSG_API_ERROR", err.Error())
 	}
 	log.Infof("发送群 %v(%v) 的消息: %v (%v)", group.Name, groupID, limitedString(m.String()), mid)
 	return OK(global.MSG{"message_id": mid})
@@ -836,7 +836,7 @@ func (bot *CQBot) uploadForwardElement(m gjson.Result, target int64, sourceType 
 		if len(bot.Client.GroupList) == 0 {
 			groupID = 1
 		} else {
-			groupID = bot.Client.GroupList[1].Uin
+			groupID = bot.Client.GroupList[0].Uin
 		}
 	}
 	builder := bot.Client.NewForwardMessageBuilder(groupID)
@@ -977,8 +977,11 @@ func (bot *CQBot) CQSendGroupForwardMessage(groupID int64, m gjson.Result) globa
 		log.Warnf("合并转发(群)消息发送失败: 账号可能被风控.")
 		return Failed(100, "SEND_MSG_API_ERROR", "请参考 go-cqhttp 端输出")
 	}
+	mid := bot.InsertGroupMessage(ret)
+	log.Infof("发送群 %v(%v)  的合并转发消息: %v (%v)", groupID, groupID, limitedString(m.String()), mid)
 	return OK(global.MSG{
-		"message_id": bot.InsertGroupMessage(ret),
+		"message_id": mid,
+		"forward_id": fe.ResId,
 	})
 }
 
@@ -1000,7 +1003,11 @@ func (bot *CQBot) CQSendPrivateForwardMessage(userID int64, m gjson.Result) glob
 		log.Warnf("合并转发(好友)消息发送失败: 账号可能被风控.")
 		return Failed(100, "SEND_MSG_API_ERROR", "请参考 go-cqhttp 端输出")
 	}
-	return OK(global.MSG{"message_id": mid})
+	log.Infof("发送好友 %v(%v)  的合并转发消息: %v (%v)", userID, userID, limitedString(m.String()), mid)
+	return OK(global.MSG{
+		"message_id": mid,
+		"forward_id": fe.ResId,
+	})
 }
 
 // CQSendPrivateMessage 发送私聊消息
@@ -1108,6 +1115,23 @@ func (bot *CQBot) CQSetGroupMemo(groupID int64, msg, img string) global.MSG {
 			if err != nil {
 				return Failed(100, "SEND_NOTICE_ERROR", err.Error())
 			}
+		}
+		return OK(nil)
+	}
+	return Failed(100, "GROUP_NOT_FOUND", "群聊不存在")
+}
+
+// CQDelGroupMemo 扩展API-删除群公告
+// @route(_del_group_notice)
+// @rename(fid->notice_id)
+func (bot *CQBot) CQDelGroupMemo(groupID int64, fid string) global.MSG {
+	if g := bot.Client.FindGroup(groupID); g != nil {
+		if g.SelfPermission() == client.Member {
+			return Failed(100, "PERMISSION_DENIED", "权限不足")
+		}
+		err := bot.Client.DelGroupNotice(groupID, fid)
+		if err != nil {
+			return Failed(100, "DELETE_NOTICE_ERROR", err.Error())
 		}
 		return OK(nil)
 	}
