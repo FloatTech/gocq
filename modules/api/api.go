@@ -21,6 +21,10 @@ func (c *Caller) call(action string, p Getter) global.MSG {
 	case ".ocr_image", "ocr_image":
 		p0 := p.Get("image").String()
 		return c.bot.CQOcrImage(p0)
+	case "_del_group_notice":
+		p0 := p.Get("group_id").Int()
+		p1 := p.Get("notice_id").String()
+		return c.bot.CQDelGroupMemo(p0, p1)
 	case "_get_group_notice":
 		p0 := p.Get("group_id").Int()
 		return c.bot.CQGetGroupMemo(p0)
@@ -337,5 +341,10 @@ func (c *Caller) call(action string, p Getter) global.MSG {
 		p2 := p.Get("name").String()
 		p3 := p.Get("folder").String()
 		return c.bot.CQUploadGroupFile(p0, p1, p2, p3)
+	case "upload_private_file":
+		p0 := p.Get("user_id").Int()
+		p1 := p.Get("file").String()
+		p2 := p.Get("name").String()
+		return c.bot.CQUploadPrivateFile(p0, p1, p2)
 	}
 }

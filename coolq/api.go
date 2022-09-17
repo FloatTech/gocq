@@ -601,6 +601,30 @@ func (bot *CQBot) CQUploadGroupFile(groupID int64, file, name, folder string) gl
 	return OK(nil)
 }
 
+// CQUploadPrivateFile 扩展API-上传私聊文件
+//
+// @route(upload_private_file)
+func (bot *CQBot) CQUploadPrivateFile(userID int64, file, name string) global.MSG {
+	target := message.Source{
+		SourceType: message.SourcePrivate,
+		PrimaryID:  userID,
+	}
+	fileBody, err := os.Open(file)
+	if err != nil {
+		log.Warnf("上传私聊文件 %v 失败: %+v", file, err)
+		return Failed(100, "OPEN_FILE_ERROR", "打开文件失败")
+	}
+	localFile := &client.LocalFile{
+		FileName: name,
+		Body:     fileBody,
+	}
+	if err := bot.Client.UploadFile(target, localFile); err != nil {
+		log.Warnf("上传私聊 %v 文件 %v 失败: %+v", userID, file, err)
+		return Failed(100, "FILE_SYSTEM_UPLOAD_API_ERROR", err.Error())
+	}
+	return OK(nil)
+}
+
 // CQGroupFileCreateFolder 拓展API-创建群文件文件夹
 //
 // @route(create_group_file_folder)
@@ -741,9 +765,9 @@ func (bot *CQBot) CQSendGroupMessage(groupID int64, m gjson.Result, autoEscape b
 		}
 	}
 	fixAt(elem)
-	mid := bot.SendGroupMessage(groupID, &message.SendingMessage{Elements: elem})
-	if mid == -1 {
-		return Failed(100, "SEND_MSG_API_ERROR", "请参考 go-cqhttp 端输出")
+	mid, err := bot.SendGroupMessage(groupID, &message.SendingMessage{Elements: elem})
+	if err != nil {
+		return Failed(100, "SEND_MSG_API_ERROR", err.Error())
 	}
 	log.Infof("发送群 %v(%v) 的消息: %v (%v)", group.Name, groupID, limitedString(m.String()), mid)
 	return OK(global.MSG{"message_id": mid})
@@ -808,7 +832,12 @@ func (bot *CQBot) uploadForwardElement(m gjson.Result, target int64, sourceType 
 	groupID := target
 	source := message.Source{SourceType: sourceType, PrimaryID: target}
 	if sourceType == message.SourcePrivate {
-		groupID = 0
+		// ios 设备的合并转发来源群号不能为 0
+		if len(bot.Client.GroupList) == 0 {
+			groupID = 1
+		} else {
+			groupID = bot.Client.GroupList[0].Uin
+		}
 	}
 	builder := bot.Client.NewForwardMessageBuilder(groupID)
 
@@ -849,17 +878,21 @@ func (bot *CQBot) uploadForwardElement(m gjson.Result, target int64, sourceType 
 			}
 			if e.Get("data.id").Exists() {
 				i := e.Get("data.id").Int()
-				m, _ := db.GetGroupMessageByGlobalID(int32(i))
+				m, _ := db.GetMessageByGlobalID(int32(i))
 				if m != nil {
-					msgTime := m.Attribute.Timestamp
+					mSource := message.SourcePrivate
+					if m.GetType() == "group" {
+						mSource = message.SourceGroup
+					}
+					msgTime := m.GetAttribute().Timestamp
 					if msgTime == 0 {
 						msgTime = ts.Unix()
 					}
 					return &message.ForwardNode{
-						SenderId:   m.Attribute.SenderUin,
-						SenderName: m.Attribute.SenderName,
+						SenderId:   m.GetAttribute().SenderUin,
+						SenderName: m.GetAttribute().SenderName,
 						Time:       int32(msgTime),
-						Message:    resolveElement(bot.ConvertContentMessage(m.Content, message.SourceGroup)),
+						Message:    resolveElement(bot.ConvertContentMessage(m.GetContent(), mSource)),
 					}
 				}
 				log.Warnf("警告: 引用消息 %v 错误或数据库未开启.", e.Get("data.id").Str)
@@ -892,7 +925,7 @@ func (bot *CQBot) uploadForwardElement(m gjson.Result, target int64, sourceType 
 					}
 				}
 			}
-			content := bot.ConvertObjectMessage(c, message.SourceGroup)
+			content := bot.ConvertObjectMessage(c, sourceType)
 			if uin != 0 && name != "" && len(content) > 0 {
 				return &message.ForwardNode{
 					SenderId:   uin,
@@ -944,8 +977,11 @@ func (bot *CQBot) CQSendGroupForwardMessage(groupID int64, m gjson.Result) globa
 		log.Warnf("合并转发(群)消息发送失败: 账号可能被风控.")
 		return Failed(100, "SEND_MSG_API_ERROR", "请参考 go-cqhttp 端输出")
 	}
+	mid := bot.InsertGroupMessage(ret)
+	log.Infof("发送群 %v(%v)  的合并转发消息: %v (%v)", groupID, groupID, limitedString(m.String()), mid)
 	return OK(global.MSG{
-		"message_id": bot.InsertGroupMessage(ret),
+		"message_id": mid,
+		"forward_id": fe.ResId,
 	})
 }
 
@@ -967,7 +1003,11 @@ func (bot *CQBot) CQSendPrivateForwardMessage(userID int64, m gjson.Result) glob
 		log.Warnf("合并转发(好友)消息发送失败: 账号可能被风控.")
 		return Failed(100, "SEND_MSG_API_ERROR", "请参考 go-cqhttp 端输出")
 	}
-	return OK(global.MSG{"message_id": mid})
+	log.Infof("发送好友 %v(%v)  的合并转发消息: %v (%v)", userID, userID, limitedString(m.String()), mid)
+	return OK(global.MSG{
+		"message_id": mid,
+		"forward_id": fe.ResId,
+	})
 }
 
 // CQSendPrivateMessage 发送私聊消息
@@ -1075,6 +1115,23 @@ func (bot *CQBot) CQSetGroupMemo(groupID int64, msg, img string) global.MSG {
 			if err != nil {
 				return Failed(100, "SEND_NOTICE_ERROR", err.Error())
 			}
+		}
+		return OK(nil)
+	}
+	return Failed(100, "GROUP_NOT_FOUND", "群聊不存在")
+}
+
+// CQDelGroupMemo 扩展API-删除群公告
+// @route(_del_group_notice)
+// @rename(fid->notice_id)
+func (bot *CQBot) CQDelGroupMemo(groupID int64, fid string) global.MSG {
+	if g := bot.Client.FindGroup(groupID); g != nil {
+		if g.SelfPermission() == client.Member {
+			return Failed(100, "PERMISSION_DENIED", "权限不足")
+		}
+		err := bot.Client.DelGroupNotice(groupID, fid)
+		if err != nil {
+			return Failed(100, "DELETE_NOTICE_ERROR", err.Error())
 		}
 		return OK(nil)
 	}
@@ -1364,6 +1421,7 @@ func (bot *CQBot) CQGetStrangerInfo(userID int64) global.MSG {
 		"age":        info.Age,
 		"level":      info.Level,
 		"login_days": info.LoginDays,
+		"vip_level":  info.VipLevel,
 	})
 }
 
