@@ -23,6 +23,5 @@ func PrintBanner() {
 	if base.Debug {
 		log.SetLevel(log.DebugLevel)
 		log.Warnf("已开启Debug模式.")
-		// log.Debugf("开发交流群: 192548878")
 	}
 }
