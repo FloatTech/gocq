@@ -29,7 +29,7 @@ func readLine() (str string) {
 	return
 }
 
-func readLineTimeout(t time.Duration, de string) (str string) {
+func readLineTimeout(t time.Duration) {
 	r := make(chan string)
 	go func() {
 		select {
@@ -37,12 +37,10 @@ func readLineTimeout(t time.Duration, de string) (str string) {
 		case <-time.After(t):
 		}
 	}()
-	str = de
 	select {
-	case str = <-r:
+	case <-r:
 	case <-time.After(t):
 	}
-	return
 }
 
 func readIfTTY(de string) (str string) {
@@ -54,6 +52,7 @@ func readIfTTY(de string) (str string) {
 }
 
 var cli *client.QQClient
+var device *client.DeviceInfo
 
 // ErrSMSRequestError SMS请求出错
 var ErrSMSRequestError = errors.New("sms request error")
@@ -170,6 +169,7 @@ func loginResponseProcessor(res *client.LoginResponse) error {
 			cli.Disconnect()
 			cli.Release()
 			cli = client.NewClientEmpty()
+			cli.UseDevice(device)
 			return qrcodeLogin()
 		case client.NeedCaptcha:
 			log.Warnf("登录需要验证码.")
@@ -210,7 +210,7 @@ func loginResponseProcessor(res *client.LoginResponse) error {
 		case client.UnsafeDeviceError:
 			log.Warnf("账号已开启设备锁，请前往 -> %v <- 验证后重启Bot.", res.VerifyUrl)
 			log.Infof("按 Enter 或等待 5s 后继续....")
-			readLineTimeout(time.Second*5, "")
+			readLineTimeout(time.Second * 5)
 			os.Exit(0)
 		case client.OtherLoginError, client.UnknownLoginError, client.TooManySMSRequestError:
 			msg := res.ErrorMessage
@@ -221,31 +221,35 @@ func loginResponseProcessor(res *client.LoginResponse) error {
 			}
 			log.Warnf("登录失败: %v", msg)
 			log.Infof("按 Enter 或等待 5s 后继续....")
-			readLineTimeout(time.Second*5, "")
+			readLineTimeout(time.Second * 5)
 			os.Exit(0)
 		}
 	}
 }
 
-func getTicket(u string) (str string) {
+func getTicket(u string) string {
+	log.Warnf("请选择提交滑块ticket方式:")
+	log.Warnf("1. 自动提交")
+	log.Warnf("2. 手动抓取提交")
+	log.Warn("请输入(1 - 2)：")
+	text := readLine()
 	id := utils.RandomString(8)
-	log.Warnf("请前往该地址验证 -> %v <- 或输入手动抓取的 ticket：（Enter 提交）", strings.ReplaceAll(u, "https://ssl.captcha.qq.com/template/wireless_mqq_captcha.html?", fmt.Sprintf("https://captcha.go-cqhttp.org/captcha?id=%v&", id)))
-	manual := make(chan string, 1)
-	go func() {
-		manual <- readLine()
-	}()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	auto := !strings.Contains(text, "2")
+	if auto {
+		u = strings.ReplaceAll(u, "https://ssl.captcha.qq.com/template/wireless_mqq_captcha.html?", fmt.Sprintf("https://captcha.go-cqhttp.org/captcha?id=%v&", id))
+	}
+	log.Warnf("请前往该地址验证 -> %v ", u)
+	if !auto {
+		log.Warn("请输入ticket： (Enter 提交)")
+		return readLine()
+	}
+
 	for count := 120; count > 0; count-- {
-		select {
-		case <-ticker.C:
-			str = fetchCaptcha(id)
-			if str != "" {
-				return
-			}
-		case str = <-manual:
-			return
+		str := fetchCaptcha(id)
+		if str != "" {
+			return str
 		}
+		time.Sleep(time.Second)
 	}
 	log.Warnf("验证超时")
 	return ""
@@ -254,7 +258,7 @@ func getTicket(u string) (str string) {
 func fetchCaptcha(id string) string {
 	g, err := download.Request{URL: "https://captcha.go-cqhttp.org/captcha/ticket?id=" + id}.JSON()
 	if err != nil {
-		log.Warnf("获取 Ticket 时出现错误: %v", err)
+		log.Debugf("获取 Ticket 时出现错误: %v", err)
 		return ""
 	}
 	if g.Get("ticket").Exists() {
