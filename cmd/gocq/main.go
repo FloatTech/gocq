@@ -457,7 +457,7 @@ func getRemoteLatestProtocolVersion(protocolType int) ([]byte, error) {
 	}
 	response, err := download.Request{URL: url}.Bytes()
 	if err != nil {
-		return download.Request{URL: "https://ghproxy.com/" + url}.Bytes()
+		return download.Request{URL: url}.Bytes()
 	}
 	return response, nil
 }
